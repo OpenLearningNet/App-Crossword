@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<script src="//code.jquery.com/jquery-1.10.1.min.js"></script>
+{{ app_init_js }}
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Crossword</title>
+<style type="text/css">
+#crossword {
+    text-align:center;
+}
+
+.crossword {
+    border-collapse:collapse;
+    font-family:"Arial",Arial, sans-serif;
+    font-weight: 600;
+    margin-left:auto;
+    margin-right:auto;
+    clear:both;
+    margin-top:10px;
+    margin-bottom:10px;
+}
+
+.crossword td {
+    border:1px solid black;
+    padding:0;
+    margin:0;
+    vertical-align:middle;
+    padding:0;
+    text-align:center;
+    width:30px;
+    height:30px;
+}
+
+.crossword .no-border {
+    border:none;
+}
+
+#clues ul {
+    list-style: none;
+    margin-left: 0;
+    padding-left: 4px;
+}
+
+#clues {
+    margin:auto;
+}
+
+#clues td {
+    vertical-align:center;
+}
+
+
+#across {
+    margin-right: 20px;
+}
+
+#title {
+    text-align: center;
+}
+
+</style>
+<link rel="stylesheet" type="text/css" href="//netdna.bootstrapcdn.com/bootstrap/3.0.2/css/bootstrap.min.css">
+
+<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="{{ media('crossword.js') }}"></script>
+
+<script type="text/javascript">
+var currentCrosswordHTML = '';
+var currentDisplayHTML = '';
+var currentLegend = {};
+
+var imagePath = "{{ media('1.png') }}".replace(/(.*)\/(.*)\.png$/i, '$1');
+
+var generate = function(crosswordHTML, displayHTML, givenLegend) {
+
+    // TODO: this all goes in adminland
+    // words[i] correlates to clues[i]
+    var words = $.trim($('#words').val()).split(/\n/g);
+    var clues = $.trim($('#clues').val()).split(/\n/g);
+
+    // Create crossword object with the words and clues
+    var cw = new Crossword(words, clues);
+
+    // create the crossword grid (try to make it have a 1:1 width to height ratio in 10 tries)
+    var tries = 50; 
+    var grid = cw.getSquareGrid(tries);
+
+    // report a problem with the words in the crossword
+    if(grid == null){
+        var bad_words = cw.getBadWords();
+        var str = [];
+        for(var i = 0; i < bad_words.length; i++){
+            str.push(bad_words[i].word);
+        }
+        alert("Unabled to fit in words:\n" + str.join("\n"));
+        return;
+    }
+
+    // turn the crossword grid into HTML
+    if (!crosswordHTML || !displayHTML) {
+        currentDisplayHTML = CrosswordUtils.toHtml(grid, true, function(placeholder) {
+            return '{{' + placeholder + '}}';
+        });
+        currentCrosswordHTML = CrosswordUtils.toHtml(grid, false, function(placeholder) {
+            return '{{' + placeholder + '}}';
+        });
+
+        currentLegend = cw.getLegend(grid);
+    } else {
+        currentCrosswordHTML = crosswordHTML;
+        currentDisplayHTML = displayHTML;
+        currentLegend = givenLegend;
+    }
+
+    document.getElementById("crossword").innerHTML = currentDisplayHTML.replace(/\{\{(\d+)\}\}/g, function(match, placeholder) {
+        return imagePath + '/' + placeholder + '.png';
+    });
+
+    generateLegend(currentLegend);
+
+    window.app.resize();
+};
+
+function escape(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+};
+
+function generateLegend(groups) {
+    for (var k in groups) {
+        var html = [];
+        for (var i = 0; i < groups[k].length; i++) {
+            var clue_input = '<span style="display: inline-block; border-bottom: 1px solid black; color: #aaa;">' + groups[k][i]['word'].toLowerCase() + ' </span>';
+            var clue = groups[k][i]['clue'];
+            var escaped_clue = escape(clue).replace(/&lt;i&gt;/g, '<i>').replace(/&lt;\/i&gt;/g, '</i>');
+            var parsed_clue = '';
+            if (escaped_clue.match(/__+/)) {
+                parsed_clue = escaped_clue.replace(/__+/, clue_input);
+            } else {
+                parsed_clue = escaped_clue += ' ' + clue_input;
+            }
+            html.push('<li class="clue-cell"><strong>' + groups[k][i]['position'] + '.</strong> ' + parsed_clue + '</li>');
+        }
+        document.getElementById(k).innerHTML = html.join("\n");
+    }
+};
+
+function getData() {
+    return {
+        'crossword': currentCrosswordHTML,
+        'filledCrossword': currentDisplayHTML,
+        'legend': currentLegend
+    };
+};
+
+$(document).ready(function() {
+
+    $.getJSON("/run/getConfig", function(response) {
+        var configuration = response.configuration;
+
+        if (configuration && configuration.words) {
+            $('#words').val(configuration.words);
+            $('#clues').val(configuration.clues); 
+            $('#title').val(configuration.title);
+            generate(configuration.crossword, configuration.filledCrossword, configuration.legend);  
+        } else {
+            generate();
+        }
+    });
+
+    $('#generate').click(function() {
+        generate();
+    });
+
+    $('#save').click(function() {
+        var $btn = $(this);
+        $btn.button('loading');
+        var data = getData();
+        var configJSON = JSON.stringify({
+            words: $('#words').val(),
+            clues: $('#clues').val(),
+            title: $('#title').val(),
+            crossword: data.crossword,
+            filledCrossword: data.filledCrossword,
+            legend: data.legend
+        });
+
+        $.post("/run/saveConfig", {
+            format: 'json',
+            config: configJSON
+        }, function(data) {
+            $btn.button('reset');
+        }, 'json');
+    });
+});
+
+</script>
+
+</head>
+
+<body> 
+    <table>
+        <tr>
+            <td>
+                <b>Clues:</b><br>
+        One clue per line. Use "_____" to represent a fill-in-the-blank. Use {1} to refer to clue number 1. in another clue.
+            </td>
+            <td>
+                <b>Words:</b><br>
+        One answer per line, each line corresponds with its respective clue.
+            </td>
+        </tr>
+        <tr>
+            <td style="width: 50%;">
+<textarea id="clues" style="width: 100%; height: 20em;" wrap="off">
+Domestic, often fluffy. Meows.
+"Woof!", said the ___.
+A _____ likes cheese, chased by {1}.
+Amphibian. Usually green.
+Green, jumping insect.
+Found in Africa, bony horns.
+Has a trunk.
+</textarea>
+            </td>
+            <td>
+<textarea id="words" style="width: 100%; height: 20em;" wrap="off">
+Cat
+Dog
+Mouse
+Frog
+Grasshopper
+Antelope
+Elephant
+</textarea>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+    <button style="float: right;" id="generate" class="btn btn-primary">Generate New Crossword</button>
+    <br>
+    <hr style="clear: both;">
+    
+    <h3 class="text-center"><input id="title" type="text" placeholder="Title"></h3>
+    <div id="crossword"></div>
+
+    <table id="clues">
+        <thead>
+            <tr>
+                <th style="text-decoration: underline;">Across</th>
+                <th style="text-decoration: underline;">Down</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><ul id="across"></ul></td>
+                <td><ul id="down"></ul></td>
+            </tr>
+        </tbody>
+    </table>
+    <br>
+
+    <button style="float: right;" id="save" data-loading-text="Saving..." class="btn btn-success">Save This Crossword</button>
+
+</body>
+</html>

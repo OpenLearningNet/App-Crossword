@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<script src="//code.jquery.com/jquery-1.10.1.min.js"></script>
+{{ app_init_js }}
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Crossword</title>
+<style type="text/css">
+#crossword {
+    text-align:center;
+}
+
+.crossword {
+    border-collapse:collapse;
+    font-family:"Arial",Arial, sans-serif;
+    font-weight: 600;
+    margin-left:auto;
+    margin-right:auto;
+    clear:both;
+    margin-top:10px;
+    margin-bottom:10px;
+}
+
+.crossword td {
+    border:1px solid black;
+    padding:0;
+    margin:0;
+    vertical-align:middle;
+    padding:0;
+    text-align:center;
+    width:30px;
+    height:30px;
+}
+
+.crossword td.selected {
+    background-color: #6e6;
+}
+
+.crossword td.conflict {
+    background-color: #e66;
+}
+
+.crossword .no-border {
+    border:none;
+}
+
+#clues ul {
+    list-style: none;
+    margin-left: 0;
+    padding-left: 4px;
+}
+
+#clues {
+    margin:auto;
+}
+
+#clues td {
+    vertical-align:center;
+}
+
+#clues input {
+    border: none;
+    border-bottom: 1px solid #444;
+    outline: none;
+    color: #444;
+    text-align: center;
+}
+
+#clues input:focus {
+    background-color: #afa;
+    -webkit-border-top-left-radius: 4px;
+    -webkit-border-top-right-radius: 4px;
+    -moz-border-radius-topleft: 4px;
+    -moz-border-radius-topright: 4px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+
+#clues input.incorrect {
+    background-color: #eaa;
+
+    -webkit-border-top-left-radius: 4px;
+    -webkit-border-top-right-radius: 4px;
+    -moz-border-radius-topleft: 4px;
+    -moz-border-radius-topright: 4px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+
+#across {
+    margin-right: 20px;
+}
+
+.crossword-input {
+    text-align: center;
+}
+.crossword-cell.pending {
+    background-color: #8af;
+}
+
+.success-banner {
+    background-color: #5b5;
+    color: white;
+    font-size: 32px;
+    text-align: center;
+}
+
+</style>
+<link rel="stylesheet" type="text/css" href="//netdna.bootstrapcdn.com/bootstrap/3.0.2/css/bootstrap.min.css">
+
+<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="{{ media('crossword.js') }}"></script>
+
+<script type="text/javascript">
+var PLACEHOLDER = '-';
+var editDirection = null;
+var answerData;
+$(function() {
+    var imagePath = "{{ media('1.png') }}".replace(/(.*)\/(.*)\.png$/i, '$1');
+
+    $.getJSON("/run/getConfig", function(response) {
+        var configuration = response.configuration;
+        $("#crossword").html(
+            configuration.crossword.replace(/\{\{(\d+)\}\}/g, function(match, placeholder) {
+                return imagePath + '/' + placeholder + '.png';
+            })
+        );
+
+        $('#crossword-title').text(configuration.title);
+        setupCrosswordInputs(configuration.legend);
+        answerData = configuration.words.split(/\n/g);
+
+        $.getJSON("/run/getSubmission", function(submissionResponse) {
+            if (submissionResponse.success) {
+                if (!submissionResponse.metadata) {
+                    submissionResponse.metadata = {
+                        answers: []
+                    };
+                }
+                loadAnswers(submissionResponse.metadata.answers);
+
+                if (submissionResponse.metadata.completed) {
+                    setCompleted();
+                }
+            } else {
+                alert("Unable to load submission at this time");
+            }
+        });
+
+        $('#save').click(function() {
+            var answers = getAnswers();
+            var $btn = $(this);
+
+            $btn.button('loading');
+            $.post("/run/saveSubmission", {
+                'metadata': JSON.stringify({
+                    'answers': answers
+                })
+            }, function(response) {
+                if (response.success) {
+                    $btn.button('reset');
+                } else {
+                    alert('Unable to save at this time')
+                }
+            }, 'json');
+        });
+
+        $('#check').click(function() {
+            var answers = getAnswers();
+            var $btn = $(this);
+            var corrections = {};
+            if (checkAnswers(answers)) {
+                $btn.button('loading');
+                $.post("/run/saveSubmission", {
+                    'submit': true,
+                    'grading': JSON.stringify({
+                        completed: true
+                    }),
+                    'metadata': JSON.stringify({
+                        'answers': answers
+                    })
+                }, function(response) {
+                    if (response.success) {
+                        $btn.button('reset');
+
+                        setCompleted();
+                        window.app.sendMessage('updateProgress', {});
+                    } else {
+                        alert('Unable to submit at this time')
+                    }
+                }, 'json');
+            } else {
+                $btn.button('loading');
+                $.post("/run/saveSubmission", {
+                    'metadata': JSON.stringify({
+                        'answers': answers
+                    })
+                }, function(response) {
+                    if (response.success) {
+                        $btn.button('reset');
+
+                        $('#answers').text('Incorrect/incomplete answers marked below:');
+
+                        window.app.resize();
+                    } else {
+                        alert('Unable to save at this time')
+                    }
+                }, 'json'); 
+            }
+
+            window.app.resize();         
+        });
+
+        window.app.resize();
+    });
+});
+
+function setCompleted() {
+    $('#answers').html(
+        '<div class="success-banner">Completed!</div>'
+    );
+    $('#check').fadeOut();
+    window.app.resize();
+};
+
+function escape(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+};
+
+function getAnswers() {
+    var answers = {};
+    $('.clue-input').each(function(i, elt) {
+        var $elt = $(elt);
+
+        answers[$elt.attr('data-index')] = $elt.val().toLowerCase();
+    });
+
+    return answers;
+};
+
+function loadAnswers(answers) {
+    $.each(answers, function(i, answer) {
+        $('.clue-input[data-index="' + i + '"]').val(answer);
+    });
+    checkConflicts(true);
+};
+
+function updateInputsFromPuzzle(row, col) {
+    $('.clue-input').each(function(i, elt) {
+        var $elt = $(elt);
+        var rowStart = parseInt($elt.attr('data-row'), 10);
+        var colStart = parseInt($elt.attr('data-col'), 10);
+        var length = parseInt($elt.attr('data-length'), 10);
+        var group = $elt.attr('data-group');
+
+        var i;
+        var rowIndex = 0;
+        var colIndex = 0;
+        var $cell;
+        var currRow, currCol;
+
+        var collectedWord = '';
+        var isChanged = false;
+        var letter;
+        for (i = 0; i !== length; ++i) {
+            if (group === 'across') {
+                colIndex = i;
+            } else {
+                rowIndex = i;
+            }
+            currRow = rowStart + rowIndex;
+            currCol = colStart + colIndex;
+
+            $cell = $('#crossword-' + currRow + '-' + currCol);
+            letter = $.trim($cell.text());
+            if ($cell.text() == ' ') {
+                letter = ' ';
+            } else if (letter == '') {
+                letter = PLACEHOLDER;
+            }
+
+            collectedWord += letter;
+
+            if (currRow === row && currCol === col) {
+                isChanged = true;
+            }
+        }
+
+        if (isChanged) {
+            $elt.val(collectedWord.toLowerCase());
+        }
+    });
+
+    checkConflicts();
+};
+
+
+function checkConflicts(updateMissingLetters, updateInputs) {
+    var conflicts = [];
+    var grid = {};
+
+    $('.clue-input').each(function(i, elt) {
+        var $elt = $(elt);
+        var val = $elt.val().toLowerCase();
+        var rowStart = parseInt($elt.attr('data-row'), 10);
+        var colStart = parseInt($elt.attr('data-col'), 10);
+        var length = parseInt($elt.attr('data-length'), 10);
+        var group = $elt.attr('data-group');
+
+        var i;
+        var currChar;
+        var gridRef;
+        var row = 0;
+        var col = 0;
+        var $cell;
+        var numChars = Math.min(val.length, length);
+
+        for (i = 0; i !== numChars; i++) {
+            if (group === 'across') {
+                col = i;
+            } else {
+                row = i;
+            }
+
+            gridRef = [rowStart + row, colStart + col].join('-');
+
+            if (grid[gridRef] && grid[gridRef] !== val[i]) {
+                conflicts.push([rowStart + row, colStart + col, gridRef]);
+            }
+            grid[gridRef] = val[i];
+
+            if (updateMissingLetters) {
+                $cell = $('#crossword-' + (rowStart + row) + '-' + (colStart + col));
+
+                if ($.trim($cell.text()) === '' && val[i] != PLACEHOLDER) {
+                    $cell.text(val[i]);
+                }
+            }
+        }
+
+        if (updateInputs && (val.length > 0)) {
+            if (val.length < length) {
+                var numLeftovers = length - val.length;
+                row = 0;
+                col = 0;
+                for (i = length-numLeftovers; i < length; i++) {
+                    if (group === 'across') {
+                        col = i;
+                    } else {
+                        row = i;
+                    }
+
+                    gridRef = [rowStart + row, colStart + col].join('-');
+
+                    if (grid[gridRef] && $.trim(grid[gridRef]) !== '' && grid[gridRef] != PLACEHOLDER) {
+                        val += grid[gridRef];
+                    } else {
+                        break;
+                    }
+                }
+
+                $elt.val(val.toLowerCase());
+            }
+        }
+    });
+
+    $('.crossword-cell').removeClass('conflict');
+    $.each(conflicts, function(i, conflict) {
+        $('#crossword-' + conflict[2]).addClass('conflict');
+    });
+
+    return conflicts;
+};
+
+
+function setupCrosswordInputs(groups) {
+    for (var k in groups) {
+        var html = [];
+        for (var i = 0; i < groups[k].length; i++) {
+            var clue_input = '<input class="clue-input" type="text" id="' + k + '-' + i + '-input' + '" maxlength="' + groups[k][i]['length'] + '" style="width: ' + groups[k][i]['length'] + 'em;" data-length="' + groups[k][i]['length'] + '" data-row="' + groups[k][i]['row'] + '" data-index="' + groups[k][i]['index'] + '" data-col="' + groups[k][i]['col'] + '" data-group="' + k + '">';
+            var clue = groups[k][i]['clue'];
+            var escaped_clue = escape(clue).replace(/&lt;i&gt;/g, '<i>').replace(/&lt;\/i&gt;/g, '</i>');
+            var parsed_clue = '';
+            if (escaped_clue.match(/__+/)) {
+                parsed_clue = escaped_clue.replace(/__+/, clue_input);
+            } else {
+                parsed_clue = escaped_clue += ' ' + clue_input;
+            }
+            html.push('<li class="clue-cell"><strong>' + groups[k][i]['position'] + '.</strong> ' + parsed_clue + '</li>');
+        }
+        document.getElementById(k).innerHTML = html.join("\n");
+    }
+
+    $('.clue-input').on('focus', function() {
+        $('.crossword-cell').removeClass('pending');
+
+        var $elt = $(this);
+        var rowStart = parseInt($elt.attr('data-row'), 10);
+        var colStart = parseInt($elt.attr('data-col'), 10);
+        var length = parseInt($elt.attr('data-length'), 10);
+        var group = $elt.attr('data-group');
+
+        $elt.removeClass('incorrect');
+
+        var row = 0;
+        var col = 0; 
+
+        var $cell; 
+
+        for (i = 0; i !== length; ++i) {
+            if (group === 'across') {
+                col = i;
+            } else {
+                row = i;
+            }
+
+            $cell = $('#crossword-' + (rowStart + row) + '-' + (colStart + col));
+
+            $cell.addClass('selected');
+        }
+
+        $elt.select();
+    }).on('blur', function() {
+        var $elt = $(this);
+        var rowStart = parseInt($elt.attr('data-row'), 10);
+        var colStart = parseInt($elt.attr('data-col'), 10);
+        var length = parseInt($elt.attr('data-length'), 10);
+        var group = $elt.attr('data-group');
+
+        var row = 0;
+        var col = 0; 
+
+        var $cell; 
+
+        for (i = 0; i !== length; ++i) {
+            if (group === 'across') {
+                col = i;
+            } else {
+                row = i;
+            }
+
+            $cell = $('#crossword-' + (rowStart + row) + '-' + (colStart + col));
+
+            $cell.removeClass('selected');
+        }
+        
+        checkConflicts(true, true);
+    });
+
+    $('.clue-input').on('keyup change', function() {
+        var $elt = $(this);
+        var rowStart = parseInt($elt.attr('data-row'), 10);
+        var colStart = parseInt($elt.attr('data-col'), 10);
+        var length = parseInt($elt.attr('data-length'), 10);
+        var group = $elt.attr('data-group');
+        var i;
+
+        $elt.removeClass('incorrect');
+
+        var row = 0;
+        var col = 0;   
+        var newVal = $elt.val().toLowerCase();
+        var $cell; 
+
+        for (i = 0; i !== length; ++i) {
+            if (group === 'across') {
+                col = i;
+            } else {
+                row = i;
+            }
+
+            $cell = $('#crossword-' + (rowStart + row) + '-' + (colStart + col));
+
+            if (newVal[i] && newVal[i] !== PLACEHOLDER && newVal[i] !== '') {
+                $cell.text(newVal[i]);   
+            } else {
+                $cell.text('');
+            }
+        }
+
+        checkConflicts(true);
+    });
+
+    $('.crossword-cell').on('click', function(clickEvt) {
+        $('.crossword-cell').removeClass('pending');
+        var $this = $(this);
+
+        var row, col, group;
+
+        row = parseInt($this.attr('data-row'), 10);
+        col = parseInt($this.attr('data-col'), 10);
+
+        if ($this.attr('data-across') == 'true') {
+            group = "across";
+        }
+        if ($this.attr('data-down') == 'true') {
+            if (group == "across") {
+                group = "both";
+            } else {
+                group = "down";
+            }
+        }
+
+        if (clickEvt.originalEvent) {
+            editDirection = group;
+        }
+
+        if ($this.hasClass('no-border')) {
+            return;
+        }
+
+        var $input = $('<input class="crossword-input" type="text" maxlength="1" style="width: 100%;">');
+
+        $this.data('value', $this.text());
+        $input.attr('placeholder', $this.text());
+        $this.html($input);
+        $input.focus();
+
+
+        $input.on('keyup', function(evt) {
+            $(this).val('');
+        });
+
+        $input.on('keydown', function(evt) {
+            var letter = String.fromCharCode(evt.which);//$(this).val();
+            var isRegistered = false;
+            var rowMove = 0;
+            var colMove = 0;
+
+            evt.preventDefault();
+
+            if (evt.which == 9) {
+                isRegistered = true;
+            }
+
+            if (evt.which == 40) { 
+                // down
+                rowMove += 1;
+                isRegistered = true;
+            } else if (evt.which == 39) { 
+                // right
+                colMove += 1;
+                isRegistered = true;
+            } else if (evt.which == 38) {
+                // up
+                rowMove -= 1;
+                isRegistered = true;
+            } else if (evt.which == 37) {
+                // left
+                colMove -= 1;
+                isRegistered = true;
+            } else if (editDirection === "down") {
+                if (evt.which == 8) {
+                    rowMove -= 1;
+                    isRegistered = true;
+                } else {
+                    rowMove += 1;
+                }
+            } else if (editDirection === "across") {
+                if (evt.which == 8) {
+                    colMove -= 1;
+                    isRegistered = true;
+                } else {
+                    colMove += 1;
+                }
+            } else if (editDirection === "both" && evt.which != 8) {
+                var right, bot;
+                var botCell, rightCell;
+
+                rightCell = $('#crossword-' + (row) + '-' + (col + 1));
+                botCell = $('#crossword-' + (row + 1) + '-' + (col));
+
+                right = $.trim(rightCell.text());
+                bot = $.trim(botCell.text());
+
+                if (right != '' || bot != '') {
+                    if (right == '') {
+                        editDirection = "across";
+                        colMove += 1;
+
+                        isRegistered = true;
+                    } else if (bot == '') {
+                        editDirection = "down";
+                        rowMove += 1;
+
+                        isRegistered = true;
+                    } else {
+                        rightCell.addClass('pending');
+                        botCell.addClass('pending');
+                    }
+                } else {
+                    rightCell.addClass('pending');
+                    botCell.addClass('pending');
+                }
+            }
+
+            if (evt.which >= 65 && evt.which <= 90 || evt.which == 32) {
+                $this.data('value', letter.toLowerCase());
+                $this.text($this.data('value'));
+                
+                updateInputsFromPuzzle(row, col);
+                isRegistered = true;
+            }
+
+            if (isRegistered) {
+                if (rowMove != 0 || colMove != 0) {
+                    var $nextCell = $('#crossword-' + (row + rowMove) + '-' + (col + colMove))
+                    $nextCell.trigger('click');
+                }
+            }
+        });
+
+        $input.on('blur', function() {
+            $this.text($this.data('value'));
+        });
+    });
+};
+
+function checkAnswers(answers) {
+
+    var isCorrect = true;
+    var incorrectAnswers = [];
+    $.each(answers, function(i, answer) {
+        if (answer.toLowerCase() !== answerData[i].toLowerCase()) {
+
+            $('.clue-input[data-index="' + i + '"]').addClass('incorrect');
+            isCorrect = false;
+            incorrectAnswers.push(answer);
+        }
+    });
+
+    return isCorrect;
+};
+
+
+</script>
+
+</head>
+
+<body> 
+    <h3 class="text-center" id="crossword-title"></h3>
+    <div id="crossword"></div>
+    <div id="answers"></div>
+    <table id="clues">
+        <thead>
+            <tr>
+                <th style="text-decoration: underline;">Across</th>
+                <th style="text-decoration: underline;">Down</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="width: 50%;" valign="top"><ul id="across"></ul></td>
+                <td style="width: 50%;" valign="top"><ul id="down"></ul></td>
+            </tr>
+        </tbody>
+    </table>
+
+
+    <button style="float: right;" id="check" data-loading="Submitting..." class="btn btn-success">Check Answers</button>
+    <span style="float: right">&nbsp;</span>
+    <button style="float: right;" id="save" data-loading="Saving..." class="btn btn-primary">Save Answers</button>
+
+</body>
+</html>
