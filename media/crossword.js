@@ -395,7 +395,7 @@ var CrosswordUtils = {
                 var is_start_of_word = false;
                 var is_across = !!cell && !!cell['across'];
                 var is_down = !!cell && !!cell['down'];
-                if(cell == null){
+                if (cell == null){
                     var char = "&nbsp;";
                     var css_class = "no-border";
                 } else {
@@ -407,10 +407,15 @@ var CrosswordUtils = {
                 var extra_data = '';
 
                 if (is_across) {
-                    extra_data += ' data-across="true"'
+                    extra_data += ' data-across="true"';
                 }
                 if (is_down) {
-                    extra_data += ' data-down="true"'
+                    extra_data += ' data-down="true"';
+                }
+
+                if (char == ' ') {
+                    extra_data += ' data-isSpace="true"';
+                    css_class += ' space-cell';
                 }
 
                 if (is_start_of_word) {

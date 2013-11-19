@@ -41,6 +41,10 @@
     background-color: #e66;
 }
 
+.crossword td.space-cell {
+    background-color: #ddd;
+}
+
 .crossword .no-border {
     border:none;
 }
@@ -133,11 +137,12 @@ $(function() {
 
         $.getJSON("/run/getSubmission", function(submissionResponse) {
             if (submissionResponse.success) {
-                if (!submissionResponse.metadata) {
+                if (!submissionResponse.metadata || !submissionResponse.metadata.answers) {
                     submissionResponse.metadata = {
                         answers: []
                     };
                 }
+
                 loadAnswers(submissionResponse.metadata.answers);
 
                 if (submissionResponse.metadata.completed) {
